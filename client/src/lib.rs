@@ -66,10 +66,11 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
 
         // Wait for an incoming TCP connection
-        if let Ok(res) = tcp_handle.await {
+        let res = tcp_handle.await;
+        heartbeat.abort();
+        if let Ok(res) = res {
             break res;
         } else {
-            heartbeat.abort();
             tokio::time::sleep(Duration::from_secs(5)).await;
         }
     };
