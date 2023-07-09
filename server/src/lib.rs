@@ -1,4 +1,5 @@
 #![feature(split_array)]
+#![feature(async_closure)]
 
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
@@ -9,7 +10,7 @@ use tokio::{
     net::{TcpStream, UdpSocket},
 };
 
-use shared::{MAGIC_BYTES, MAGIC_BYTES_SIZE, MULTICAST_ADDRESS, MULTICAST_PORT};
+use shared::{try_until, MAGIC_BYTES, MAGIC_BYTES_SIZE, MULTICAST_ADDRESS, MULTICAST_PORT};
 
 fn remove_header(msg: &[u8]) -> Option<&[u8]> {
     if msg.len() < MAGIC_BYTES_SIZE {
@@ -50,11 +51,15 @@ async fn communicate(mut stream: TcpStream) {
 }
 
 #[tokio::main]
-pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
+pub async fn main() -> ! {
     // Create the UDP socket that we'll be using for multicast
-    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, MULTICAST_PORT)).await?;
+    let bind_udp = async || UdpSocket::bind((Ipv4Addr::UNSPECIFIED, MULTICAST_PORT)).await;
+    let socket = try_until(bind_udp, Duration::from_secs(1)).await;
+
     // Join the multicast group to recieve packets from clients
-    socket.join_multicast_v4(MULTICAST_ADDRESS, Ipv4Addr::UNSPECIFIED)?;
+    let join_mc = async || socket.join_multicast_v4(MULTICAST_ADDRESS, Ipv4Addr::UNSPECIFIED);
+    try_until(join_mc, Duration::from_secs(1)).await;
+
     loop {
         // Await a UDP packet from multicast
         let mut buf = Vec::new();

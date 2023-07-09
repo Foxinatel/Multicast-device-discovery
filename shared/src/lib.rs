@@ -1,4 +1,6 @@
-use std::net::Ipv4Addr;
+#![feature(impl_trait_in_fn_trait_return)]
+
+use std::{fmt::Display, future::Future, net::Ipv4Addr, time::Duration};
 
 pub const MAGIC_BYTES_SIZE: usize = 32;
 // This is actually just the sha256sum of "Hello World!"
@@ -10,3 +12,23 @@ pub const MAGIC_BYTES: [u8; MAGIC_BYTES_SIZE] = [
 pub const MULTICAST_ADDRESS: Ipv4Addr = Ipv4Addr::new(239, 2, 2, 2);
 pub const MULTICAST_PORT: u16 = 8888;
 pub const MULTICAST_SOCKET: (Ipv4Addr, u16) = (MULTICAST_ADDRESS, MULTICAST_PORT);
+
+pub async fn try_until<F, T, E>(
+    func: impl Fn() -> F,
+    repeat: Duration,
+) -> T
+where
+    F: Future<Output = Result<T, E>>,
+    T: Send + 'static,
+    E: Display + 'static,
+{
+    loop {
+        match func().await {
+            Ok(res) => break res,
+            Err(err) => {
+                eprintln!("Encountered Error: {err}");
+                tokio::time::sleep(repeat).await
+            }
+        }
+    }
+}

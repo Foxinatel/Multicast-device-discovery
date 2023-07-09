@@ -1,3 +1,5 @@
+#![feature(async_closure)]
+
 use std::{
     net::{Ipv4Addr, SocketAddr},
     time::Duration,
@@ -8,7 +10,7 @@ use tokio::{
     net::{TcpListener, TcpStream, UdpSocket},
 };
 
-use shared::{MAGIC_BYTES, MULTICAST_SOCKET};
+use shared::{MAGIC_BYTES, MULTICAST_SOCKET, try_until};
 
 const CLIENT_LOCAL_ADDRESS: (Ipv4Addr, u16) = (Ipv4Addr::UNSPECIFIED, 0);
 
@@ -43,11 +45,7 @@ async fn heartbeat(socket: UdpSocket, msg: Vec<u8>) {
 
 async fn tcp_listen(listener: TcpListener, port: u16) -> (TcpStream, SocketAddr) {
     println!("Listening for TCP connections on port {port}!");
-    loop {
-        if let Ok(res) = listener.accept().await {
-            return res;
-        }
-    }
+    try_until(async || {listener.accept().await}, Duration::ZERO).await
 }
 
 async fn get_connection() -> Result<(TcpStream, SocketAddr), Box<dyn std::error::Error>> {
@@ -86,17 +84,7 @@ async fn get_connection() -> Result<(TcpStream, SocketAddr), Box<dyn std::error:
 #[tokio::main]
 pub async fn main() -> ! {
     loop {
-        // We need to loop here in case the thread for TCP connections fails entirely
-        let (stream, socket) = loop {
-            match get_connection().await {
-                Ok(res) => break res,
-                Err(err) => {
-                    eprintln!("Err: {err}");
-                    tokio::time::sleep(Duration::from_secs(5)).await
-                }
-            }
-        };
-
+        let (stream, socket) = try_until(get_connection, Duration::from_secs(5)).await;
         communicate(stream, socket).await;
         println!("Connection to server terminated, resuming idle multicast pings!");
     }
