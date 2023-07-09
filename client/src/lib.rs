@@ -22,7 +22,10 @@ async fn communicate(mut stream: TcpStream, socket: SocketAddr) {
     println!("Connected to {:?}", socket);
     loop {
         let mut buf = Vec::new();
-        if stream.read_buf(&mut buf).await.is_ok() {
+        if let Ok(n) = stream.read_buf(&mut buf).await {
+            if n == 0 {
+                return;
+            }
             if let Ok(msg) = String::from_utf8(buf) {
                 println!("{msg}")
             }
@@ -30,52 +33,71 @@ async fn communicate(mut stream: TcpStream, socket: SocketAddr) {
     }
 }
 
-#[tokio::main]
-pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // We need to loop here in case the thread for TCP connections fails entirely
-    let (stream, socket) = loop {
-        // We pass a 0 as the port to let the OS designate it
-        let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
-        // Discover what port was assigned to the TCP listener
-        let tcp_port = match listener.local_addr()? {
-            std::net::SocketAddr::V4(addr) => addr.port(),
-            std::net::SocketAddr::V6(addr) => addr.port(),
-        };
+async fn heartbeat(socket: UdpSocket, msg: Vec<u8>) {
+    loop {
+        // Send a single UDP packet to the multicast server
+        socket.send_to(&msg, MULTICAST_SOCKET).await.unwrap();
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+}
 
-        // Create a UDP socket for multicast
-        let socket = UdpSocket::bind(CLIENT_LOCAL_ADDRESS).await?;
-        // Prepend the magic bytes to the port number
-        let msg = prepend_magic_bytes(&tcp_port.to_le_bytes());
-
-        let heartbeat = tokio::spawn(async move {
-            loop {
-                // Send a single UDP packet to the multicast server
-                socket.send_to(&msg, MULTICAST_SOCKET).await.unwrap();
-                tokio::time::sleep(Duration::from_secs(5)).await;
-            }
-        });
-
-        // Spawn a TCP listener on designated port
-        let tcp_handle = tokio::spawn(async move {
-            println!("Listening for TCP connections on port {tcp_port}!");
-            loop {
-                if let Ok(res) = listener.accept().await {
-                    return res;
-                }
-            }
-        });
-
-        // Wait for an incoming TCP connection
-        let res = tcp_handle.await;
-        heartbeat.abort();
-        if let Ok(res) = res {
-            break res;
-        } else {
-            tokio::time::sleep(Duration::from_secs(5)).await;
+async fn tcp_listen(listener: TcpListener, port: u16) -> (TcpStream, SocketAddr) {
+    println!("Listening for TCP connections on port {port}!");
+    loop {
+        if let Ok(res) = listener.accept().await {
+            return res;
         }
+    }
+}
+
+async fn get_connection() -> Result<(TcpStream, SocketAddr), Box<dyn std::error::Error>> {
+    // We pass a 0 as the port to let the OS designate it
+    let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).await?;
+
+    // Discover what port was assigned to the TCP listener
+    let tcp_port = match listener.local_addr()? {
+        std::net::SocketAddr::V4(addr) => addr.port(),
+        std::net::SocketAddr::V6(addr) => addr.port(),
     };
 
-    communicate(stream, socket).await;
+    // Create a UDP socket for multicast
+    let socket = UdpSocket::bind(CLIENT_LOCAL_ADDRESS).await?;
 
-    Ok(())
+    // Prepend the magic bytes to the port number
+    let msg = prepend_magic_bytes(&tcp_port.to_le_bytes());
+
+    // Spawn a heartbeat that'll send out a multicast message at fixed intervals
+    let heartbeat = tokio::spawn(heartbeat(socket, msg));
+
+    // Spawn a TCP listener on designated port
+    let tcp_handle = tokio::spawn(tcp_listen(listener, tcp_port));
+
+    // Wait for an incoming TCP connection
+    let res = tcp_handle.await;
+
+    // Kill the heartbeat, as we'll be in once of two states:
+    // 1. A TCP connection was accepted, at which point we can migrate to that
+    // 2. The thread listening for TCP connections was killed, at which point we'll need to create a new listener
+    heartbeat.abort();
+
+    Ok(res?)
+}
+
+#[tokio::main]
+pub async fn main() -> ! {
+    loop {
+        // We need to loop here in case the thread for TCP connections fails entirely
+        let (stream, socket) = loop {
+            match get_connection().await {
+                Ok(res) => break res,
+                Err(err) => {
+                    eprintln!("Err: {err}");
+                    tokio::time::sleep(Duration::from_secs(5)).await
+                }
+            }
+        };
+
+        communicate(stream, socket).await;
+        println!("Connection to server terminated, resuming idle multicast pings!");
+    }
 }
