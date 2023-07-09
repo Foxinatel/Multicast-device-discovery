@@ -7,6 +7,6 @@ pub const MAGIC_BYTES: [u8; MAGIC_BYTES_SIZE] = [
     0xc2, 0x13, 0x66, 0x78, 0x0a, 0xf1, 0xf4, 0x3b, 0xd5, 0x4a, 0x37, 0x81, 0x6b, 0x6a, 0xb3, 0x40,
 ];
 
-pub const MULTICAST_ADDRESS: Ipv4Addr = Ipv4Addr::new(234, 2, 2, 2);
+pub const MULTICAST_ADDRESS: Ipv4Addr = Ipv4Addr::new(239, 2, 2, 2);
 pub const MULTICAST_PORT: u16 = 8888;
 pub const MULTICAST_SOCKET: (Ipv4Addr, u16) = (MULTICAST_ADDRESS, MULTICAST_PORT);
